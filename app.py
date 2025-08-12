@@ -63,6 +63,9 @@ elif menu == "Data Exploration":
     st.header("📊 Data Exploration")
 
     st.subheader("Dataset Overview")
+
+    st.dataframe(df.astype(str))
+    
     st.write(f"**Shape:** {df.shape[0]} rows × {df.shape[1]} columns")
     st.write("**Columns:**", list(df.columns))
     st.write("**Data Types:**")
