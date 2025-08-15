@@ -7,29 +7,80 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.metrics import classification_report, confusion_matrix
 
-# -------------------------------
-# Streamlit Page Config
-# -------------------------------
-st.set_page_config(page_title="Titanic Survival Prediction App", layout="wide")
+# --- ensure _arrow_safe is defined before loaders so loaders can return safe dfs ---
+def _arrow_safe(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy().reset_index(drop=True)
+
+    # drop accidental unnamed columns from CSV exports
+    drop_cols = [c for c in out.columns if (isinstance(c, str) and (c.strip() == "" or c.startswith("Unnamed")))]
+    if drop_cols:
+        out = out.drop(columns=drop_cols)
+
+    for col in out.columns:
+        ser = out[col]
+
+        # integer-like (includes pandas nullable "Int64")
+        if pd.api.types.is_integer_dtype(ser) or str(ser.dtype).startswith("Int"):
+            out[col] = ser.astype("float64").to_numpy() if ser.isna().any() else ser.astype("int64").to_numpy()
+            continue
+
+        # floats
+        if pd.api.types.is_float_dtype(ser):
+            out[col] = ser.astype("float64").to_numpy()
+            continue
+
+        # booleans (incl. pandas nullable "boolean")
+        if pd.api.types.is_bool_dtype(ser) or str(ser.dtype) == "boolean":
+            out[col] = ser.fillna(False).astype("bool").to_numpy()
+            continue
+
+        # datetimes
+        if pd.api.types.is_datetime64_any_dtype(ser):
+            out[col] = pd.to_datetime(ser, errors="coerce").to_numpy()
+            continue
+
+        # categorical
+        if isinstance(ser.dtype, pd.CategoricalDtype):
+            out[col] = ser.astype(str).fillna("").to_numpy()
+            continue
+
+        # fallback: object/mixed -> string
+        out[col] = ser.fillna("").astype(str).to_numpy()
+
+    return pd.DataFrame({c: out[c] for c in out.columns})
 
 # -------------------------------
-# Load Data & Model
+# Load Data & Model (return Arrow-safe dfs)
 # -------------------------------
 @st.cache_data
 def load_data():
-    return pd.read_csv("./data/Titanic-Dataset.csv")  # Adjust path if needed
+    df = pd.read_csv(r"./data/Titanic-Dataset.csv", low_memory=False)
+    # drop accidental index/unnamed column(s)
+    drop_cols = [c for c in df.columns if isinstance(c, str) and (c.strip() == "" or c.startswith("Unnamed"))]
+    if drop_cols:
+        df = df.drop(columns=drop_cols)
+    return _arrow_safe(df)
 
 @st.cache_data
 def load_test():
-    return pd.read_csv("./data/test.csv")
+    df = pd.read_csv(r"./data/test.csv", low_memory=False)
+    drop_cols = [c for c in df.columns if isinstance(c, str) and (c.strip() == "" or c.startswith("Unnamed"))]
+    if drop_cols:
+        df = df.drop(columns=drop_cols)
+    return _arrow_safe(df)
 
 @st.cache_resource
 def load_model():
-    return joblib.load("./notebooks/model.pkl")
+    return joblib.load(r"./notebooks/model.pkl")
 
 df = load_data()
 test_df = load_test()
 model = load_model()
+
+# convert datasets to Arrow-safe forms immediately after loading
+df_ui = _arrow_safe(df)
+test_df_ui = _arrow_safe(test_df)
+
 
 # -------------------------------
 # Sidebar Navigation
@@ -57,27 +108,11 @@ if menu == "Home":
     st.info("Use the sidebar to navigate between sections.")
 
 # -------------------------------
-# Data Exploration Page
+# Data Exploration Page (removed)
 # -------------------------------
 elif menu == "Data Exploration":
     st.header("📊 Data Exploration")
-
-    st.subheader("Dataset Overview")
-
-    st.dataframe(df.astype(str))
-    
-    st.write(f"**Shape:** {df.shape[0]} rows × {df.shape[1]} columns")
-    st.write("**Columns:**", list(df.columns))
-    st.write("**Data Types:**")
-    st.write(df.dtypes)
-
-    st.subheader("Sample Data")
-    st.dataframe(df.head())
-
-    st.subheader("Interactive Filter")
-    col_choice = st.multiselect("Select columns to view:", df.columns, default=df.columns)
-    rows_choice = st.slider("Number of rows to display:", 1, 50, 5)
-    st.dataframe(df[col_choice].head(rows_choice))
+    st.info("Data Exploration section removed to avoid Arrow serialization issues. Use Visualisations or Model pages.")
 
 # -------------------------------
 # Visualisations Page
@@ -87,24 +122,24 @@ elif menu == "Visualisations":
 
     # Chart 1: Survival Count
     st.subheader("Survival Count")
-    fig1 = px.histogram(df, x="Survived", color="Survived", nbins=2)
+    fig1 = px.histogram(df_ui, x="Survived", color="Survived", nbins=2)
     st.plotly_chart(fig1, use_container_width=True)
 
     # Chart 2: Survival by Gender
     st.subheader("Survival by Gender")
-    fig2 = px.histogram(df, x="Sex", color="Survived", barmode="group")
+    fig2 = px.histogram(df_ui, x="Sex", color="Survived", barmode="group")
     st.plotly_chart(fig2, use_container_width=True)
 
     # Chart 3: Age Distribution
     st.subheader("Age Distribution by Survival")
-    fig3 = px.histogram(df, x="Age", color="Survived", nbins=30, marginal="box")
+    fig3 = px.histogram(df_ui, x="Age", color="Survived", nbins=30, marginal="box")
     st.plotly_chart(fig3, use_container_width=True)
 
     # Optional interactive filter
     st.subheader("Filter by Embarked Port")
-    embarked_sel = st.selectbox("Select Embarked:", ["All"] + df["Embarked"].dropna().unique().tolist())
+    embarked_sel = st.selectbox("Select Embarked:", ["All"] + df_ui["Embarked"].dropna().unique().tolist())
     if embarked_sel != "All":
-        filtered_df = df[df["Embarked"] == embarked_sel]
+        filtered_df = df_ui[df_ui["Embarked"] == embarked_sel]
         fig4 = px.histogram(filtered_df, x="Pclass", color="Survived", barmode="group")
         st.plotly_chart(fig4, use_container_width=True)
 
@@ -161,8 +196,8 @@ elif menu == "Model Prediction":
 elif menu == "Model Performance":
     st.header("📊 Model Performance")
 
-    X_test = test_df.drop(columns=["Survived"])
-    y_test = test_df["Survived"]
+    X_test = test_df_ui.drop(columns=["Survived"])
+    y_test = test_df_ui["Survived"]
 
     y_pred = model.predict(X_test)
     y_proba = model.predict_proba(X_test)[:, 1]
